@@ -13,7 +13,7 @@
 <section class="card"><h2>作答 / 先填再看解析</h2><div id="stageNav" class="stage-nav" aria-label="选择小问"></div><h3 id="stageTitle"></h3><p id="stageSource" class="stage-source"></p><div class="actions"><label id="drawLabel" class="draw-label"><input id="draw" type="checkbox">涂格模式：点格切换 1 / 0</label><button id="zeros">本小问空格全部填 0</button></div><p class="muted">默认键盘填数：Tab 向右换格，Enter 跳到下一行同一列；Shift+Enter 向上换格，最后一行按 Enter 留在原格。涂格模式可用空格键切换 0/1；灰阶题可填负数、分数或小数，按题面取整规则判分；也可开启涂格模式画图，画完后把空格填 0。空白不会自动算对。提交后点击格子看解析；要继续涂格，请点“修改答案”。</p><div id="answerGrid"></div>
 <section class="concept-box"><h3>再判断一句，检查思路</h3><p id="conceptPrompt"></p><div id="conceptChoices" class="choices"></div><div id="conceptFeedback" aria-live="polite"></div></section>
 <label for="reason"><strong>我的计算思路（可选）</strong></label><textarea id="reason" placeholder="例如：第 3 行第 2 列，上下左右中有 0，所以……"></textarea><p class="muted">文字思路不会被程序自动判分。可导出作答记录发给我，进一步检查你的推理。</p><div class="actions" style="margin-top:14px"><button id="check" class="primary">提交整题并检查</button><button id="editAnswers">修改答案</button><button id="clear">重做本题</button><button id="next">下一题 →</button></div><div id="feedback" class="status" aria-live="polite"></div><button id="reveal" class="hidden">查看完整标准答案（记为已看答案）</button><div id="solution" class="solution hidden"></div></section></div>
-<section id="explanation" class="card explain hidden"><h2>逐格推导 / <span id="selectedLabel"></span></h2><p class="muted">金框标出参与判断的位置，绿色内框标记中心。图外像素按题面规则处理。不同小问可在上方切换。</p><div class="details"><div class="explain-diagrams"><div id="locatedSource"></div><div id="patch"></div></div><div><div id="calculation" class="math"></div><p id="tip" class="rules"></p></div></div></section>
+<section id="explanation" class="card explain hidden"><h2>逐格推导 / <span id="selectedLabel"></span></h2><p class="muted">金框标出参与判断的位置，绿色内框标记中心。mask越界时直接复制本步输入像素，不补零。不同小问可在上方切换。</p><div class="details"><div class="explain-diagrams"><div id="locatedSource"></div><div id="patch"></div></div><div><div id="calculation" class="math"></div><p id="tip" class="rules"></p></div></div></section>
 <footer><button id="export">导出作答记录与思路</button><p>仅在当前浏览器保存作答，不上传个人答案。涂格和填数使用同一份答案；正确答案按本页明确规则生成。若老师另行规定边界或扫描方式，以试卷为准。</p></footer>
 </main><script id="engine">'use strict';
 // All coordinates are zero-based internally. The UI displays one-based coordinates.
@@ -161,11 +161,51 @@ describeCell=function(q,stages,s,r,c){if(!q.pre)return describePostprocessing(q,
  else {const h=histStats(source),level=st.op==='histStats'?r:source[r][c],count=h.slice(0,level+1).reduce((sum,row)=>sum+row[0],0);text=`灰阶${level}的频数=${h[level][0]}；不大于${level}的像素共${count}个。\nCDF(${level})=${count}/16=${h[level][1]}。\n映射=int(255×${h[level][1]})=${h[level][2]}。\n${st.op==='histStats'?`本栏填${value}。`:`原像素${level}替换为${value}。`}\n不减去CDF_min；这不是cv2.equalizeHist的逐值复现。`}
  return {value,text,patch,source,k,center,inputName:'原图'};
 };
+
+// Classroom convention: keep the input border, process only complete windows.
+const solveBeforeBorder=solveQuestion,describeBeforeBorder=describeCell;
+const WINDOW_OPS=['erode','dilate','hit','thinA','thinB','mean','meanCode','linear','rankMin','rankMax','rankMedian'];
+const borderCell=(a,r,c)=>r===0||c===0||r===a.length-1||c===a[0].length-1;
+function keepBorder(a,k,op){const computed=localOperation(a,k,op);return computed.map((row,r)=>row.map((v,c)=>borderCell(a,r,c)?a[r][c]:v))}
+derivedImages=function(q){const D=keepBorder(q.src,BOX,'dilate'),E=keepBorder(q.src,BOX,'erode');return {A:q.src,D,E,O:keepBorder(E,BOX,'dilate'),C:keepBorder(D,BOX,'erode')}};
+QUESTIONS.forEach(q=>{
+ if(q.stages.some(st=>WINDOW_OPS.includes(st.op))){
+  q.rules=q.rules.replace(/图外视为 0，边缘也参与计算；/g,'').replace(/图外视为0，输出为5×5。/g,'').replace(/图外视为 0，输出为 5×5。/g,'').replace(/图外补 0/g,'边界保留原值').replace(/只计算核完全在原图内的位置（valid），5×5 输入得到 3×3 输出。/g,'').replace(/输入4×5，3×3窗口只算valid区域，三个输出均为2×3。/g,'输入4×5，三个输出均为4×5。').replace(/L和g均为3×3/g,'L和g均与输入等大');
+  q.rules='课堂边界规则：输出与输入等大。3×3 mask 完整落在图内才运算；最外圈不计算，直接复制本步输入的原像素。不补零、不裁剪。连续运算每步都遵循此规则。 '+q.rules;
+  q.stages.forEach(st=>{if(WINDOW_OPS.includes(st.op)){st.valid=false;st.keepBorder=true}});
+ }
+});
+meanQ.title='均值滤波：保留小数 / 整数结果';
+meanQ.intro='两个小问分别从原图计算均值：①保留小数；②内部取sum//9。两问均按你的课堂规则保留边界像素。';
+meanQ.rules='课堂边界规则：输出同为5×5；只有内部3×3位置计算窗口，边界直接保留原值，不补零。第一问填精确分数或小数；第二问内部向下取整。第二问仅借用讲义sum//9的取整方式，边界按课堂要求处理，不复现讲义代码初始化为0的边框。';
+meanQ.stages[0].label='均值：同尺寸，保留小数';meanQ.stages[1].label='均值：同尺寸，内部向下取整';
+solveQuestion=function(q){
+ if(!q.stages.some(st=>WINDOW_OPS.includes(st.op)))return solveBeforeBorder(q);
+ const results=[];
+ for(const st of q.stages){
+  const input=typeof st.source==='number'?results[st.source].output:q.src;let output;
+  if(['erode','dilate','hit'].includes(st.op))output=keepBorder(input,st.k,st.op);
+  else if(st.op==='thinA'||st.op==='thinB')output=thinning(input,st.op==='thinA'?'A':'B').map((row,r)=>row.map((v,c)=>borderCell(input,r,c)?input[r][c]:v));
+  else if(WINDOW_OPS.includes(st.op)){
+   const interior=computePre(q,{...st,input,op:st.op==='meanCode'?'mean':st.op,div:st.div||9});
+   output=input.map((row,r)=>row.map((v,c)=>borderCell(input,r,c)?v:st.op==='meanCode'?Math.floor(interior[r-1][c-1]):interior[r-1][c-1]));
+  }else if(st.op==='union')output=st.sources.map(i=>results[i].output).reduce((a,b)=>combine(a,b,'or'));
+  else throw Error('Unsupported composite stage '+st.op);
+  results.push({...st,input,output});
+ }return results;
+};
+describeCell=function(q,stages,s,r,c){const st=stages[s];if(!st.keepBorder)return describeBeforeBorder(q,stages,s,r,c);
+ if(borderCell(st.input,r,c))return {value:st.output[r][c],text:`当前位置在边界，3×3 mask 无法完整放进图内。\n不进行运算，也不补零。\n直接复制本步输入 (${r+1},${c+1}) 的像素 ${st.input[r][c]} → 输出 ${st.output[r][c]}。`,patch:null,source:st.input,k:st.k,center:null,border:true};
+ if(q.pre){const adjusted=stages.map((item,i)=>i===s?{...item,valid:false}:item);const result=describeBeforeBorder(q,adjusted,s,r,c);if(q.id==='laplacian'&&s===1){const L=stages[0].output[r][c];result.text=result.text.split('\n也可用')[0]+`\n也可用 f−L = ${st.input[r][c]}−(${L}) = ${st.output[r][c]}。`}return {...result,center:[r,c]}}
+ return {...describeBeforeBorder(q,stages,s,r,c),center:[r,c]};
+};
 </script><script>function matchesStage(q,st,a,b){return st.integer?Number.isSafeInteger(a)&&a===b:matches(q,a,b)}
-const $=id=>document.getElementById(id),STORAGE='lecture-postprocessing-practice-v2';
+const $=id=>document.getElementById(id),STORAGE='lecture-postprocessing-practice-keep-border-v3';
 const fresh=()=>({answers:[],concept:null,reason:'',checked:false,revealed:false});
 let states=QUESTIONS.map(fresh),current=0,activeStage=0,draw=false,storageOK=true;
 try{const stored=JSON.parse(localStorage.getItem(STORAGE)||'null');if(stored?.version===2&&stored.states.length<=QUESTIONS.length){states=QUESTIONS.map((q,i)=>({...fresh(),...(stored.ids?stored.states[stored.ids.indexOf(q.id)]:stored.states[i])}));if(!stored.ids){states[12]=fresh();}current=Math.min(QUESTIONS.length-1,Math.max(0,stored.current||0))}}catch(e){storageOK=false}
+// Keep previous written work; invalidate grades after the boundary rule changed.
+try{if(!localStorage.getItem(STORAGE)){const old=JSON.parse(localStorage.getItem('lecture-postprocessing-practice-v2')||'null');if(old?.version===2){states=QUESTIONS.map((q,i)=>{const previous=old.states[old.ids?old.ids.indexOf(q.id):i];if(!previous)return fresh();const state={...fresh(),...previous,checked:false};state.answers=solveQuestion(q).map((st,j)=>{const values=previous.answers?.[j]||[];if(st.keepBorder&&values.length===(st.output.length-2)*(st.output[0].length-2)){const w=st.output[0].length;return st.output.flat().map((_,n)=>{const r=Math.floor(n/w),c=n%w;return borderCell(st.input,r,c)?'':values[(r-1)*(w-2)+c-1]??''})}return values});return state});current=Math.min(QUESTIONS.length-1,Math.max(0,old.current||0))}}}catch(e){storageOK=false}
 function save(){try{localStorage.setItem(STORAGE,JSON.stringify({version:2,current,ids:QUESTIONS.map(q=>q.id),states}))}catch(e){storageOK=false}}
 function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function answer(s,i){return states[current].answers[s]?.[i]??''}
@@ -191,7 +231,7 @@ function render(){const q=QUESTIONS[current],state=states[current];$('title').te
  $('sourceLabel').textContent=q.other?'原图 f':'原图 A';$('thinOrder').innerHTML=q.thinConditions||q.stages.some(s=>s.op.startsWith('thin'))?'<h3>邻居编号（讲义）</h3>'+table([['P9','P2','P3'],['P8','P1','P4'],['P7','P6','P5']],{kernel:true}):'';
  $('conceptPrompt').textContent=q.concept.prompt;$('conceptChoices').innerHTML=q.concept.options.map((text,i)=>`<label class="choice"><input type="radio" name="concept" value="${i}" ${state.concept===i?'checked':''}>${escapeHTML(text)}</label>`).join('');$('reason').value=state.reason;$('feedback').textContent='';$('conceptFeedback').textContent='';$('explanation').classList.add('hidden');$('solution').classList.toggle('hidden',!state.revealed);$('solution').innerHTML=state.revealed?solutionHTML(q):'';$('reveal').classList.toggle('hidden',!state.checked);progress();renderStage();if(state.checked)gradeUI();
 }
-function renderStage(){const q=QUESTIONS[current],st=solveQuestion(q)[activeStage];$('stageTitle').textContent=st.label;$('stageSource').textContent=q.pre?(st.op==='meanCode'?'按讲义代码：输出同尺寸，边框不计算、保持0，内部向下取整。':st.valid?'仅计算valid窗口；输出坐标加1才是原图中心坐标。':'按题面及表格行列标题作答。'):typeof st.source==='number'?`本步输入：第 ${st.source+1} 步的整张结果。`:st.op==='union'?'本步输入：前四个方向的匹配结果，逐格 OR。':q.thinConditions?'按栏目填写；“是否删除”一栏填 1 表示删，0 表示不删。':'本步与其他独立小问分别计算；按题面读取对应图像。';
+function renderStage(){const q=QUESTIONS[current],st=solveQuestion(q)[activeStage];$('stageTitle').textContent=st.label;$('stageSource').textContent=st.keepBorder?'输出与输入等大；mask越界的位置直接保留本步输入原像素。'+(typeof st.source==='number'?`本步读取第 ${st.source+1} 步结果。`:''):q.pre?(st.op==='meanCode'?'按讲义代码：输出同尺寸，边框不计算、保持0，内部向下取整。':st.valid?'仅计算valid窗口；输出坐标加1才是原图中心坐标。':'按题面及表格行列标题作答。'):typeof st.source==='number'?`本步输入：第 ${st.source+1} 步的整张结果。`:st.op==='union'?'本步输入：前四个方向的匹配结果，逐格 OR。':q.thinConditions?'按栏目填写；“是否删除”一栏填 1 表示删，0 表示不删。':'本步与其他独立小问分别计算；按题面读取对应图像。';
  $('kernel').innerHTML=st.k?table(st.k,{kernel:true,hit:st.op==='hit'}):'<p class="muted">本步不使用乘加核；依题面公式或规则判断。</p>';
  $('kernelCaption').textContent=st.op.startsWith('rank')?'全1 mask只指定9格窗口；按题意排序取值，不做乘加。':q.pre&&st.k?`本步按给定核运算${st.div?'，整体除以 '+st.div:''}。${st.integer?'结果按题面整数规则处理。':'保留正负号和题面要求的小数。'}`:q.mean?'整个核乘以 1/9；每格权重相同。求和后除以 9。':st.op==='hit'?'模板：0 必须匹配背景，1 必须匹配前景，· 不限制。':st.k?'核：1 参与，0 忽略。中心包含在内。':'';
  $('drawLabel').classList.toggle('hidden',!isBinary(q));$('draw').checked=draw;
@@ -206,16 +246,16 @@ function gradeUI(){const q=QUESTIONS[current],state=states[current],sol=solveQue
  const concept=q.concept; $('conceptFeedback').textContent=state.concept===null?'概念题尚未作答。':`${state.concept===concept.answer?'✓ 判断正确':'× 判断有误'}。${concept.explain}`;
  q.stages.forEach((st,s)=>{if(typeof st.source==='number'&&['erode','dilate','thinA','thinB'].includes(st.op)){
  const prev=sol[st.source].output,entered=prev.map((row,r)=>row.map((_,c)=>parseValue(answer(st.source,r*row.length+c))));
- if(entered.flat().every(v=>v===0||v===1)){const out=st.op.startsWith('thin')?thinning(entered,st.op==='thinA'?'A':'B'):localOperation(entered,st.k,st.op),right=out.flat().filter((v,i)=>parseValue(answer(s,i))===v).length;$('feedback').textContent+=`\n错误传递检查：按你填写的第 ${st.source+1} 步继续计算，第 ${s+1} 步有 ${right}/${out.flat().length} 格吻合。${right===out.flat().length&&grades[st.source].right<grades[st.source].total?'后续方法一致，应先检查中间图。':'正式判分仍以正确中间图为准。'}`}
+ if(entered.flat().every(v=>v===0||v===1)){const out=st.op.startsWith('thin')?thinning(entered,st.op==='thinA'?'A':'B').map((row,r)=>row.map((v,c)=>borderCell(entered,r,c)?entered[r][c]:v)):keepBorder(entered,st.k,st.op),right=out.flat().filter((v,i)=>parseValue(answer(s,i))===v).length;$('feedback').textContent+=`\n错误传递检查：按你填写的第 ${st.source+1} 步继续计算，第 ${s+1} 步有 ${right}/${out.flat().length} 格吻合。${right===out.flat().length&&grades[st.source].right<grades[st.source].total?'后续方法一致，应先检查中间图。':'正式判分仍以正确中间图为准。'}`}
  }});
  document.querySelectorAll('#answerGrid .answer').forEach(el=>{const i=+el.dataset.cell,v=parseValue(el.value),expected=sol[activeStage].output.flat()[i];el.classList.remove('right','wrong','empty');el.classList.add(v===null?'empty':matchesStage(q,sol[activeStage],v,expected)?'right':'wrong');el.setAttribute('aria-invalid',String(v!==null&&!matchesStage(q,sol[activeStage],v,expected)));el.title=v===null?'未填写':matchesStage(q,sol[activeStage],v,expected)?'正确':'错误：点击查看推导'})
 }
 function showCell(i){const q=QUESTIONS[current],sol=solveQuestion(q),st=sol[activeStage],w=st.output[0].length,r=Math.floor(i/w),c=i%w,info=describeCell(q,sol,activeStage,r,c);$('explanation').classList.remove('hidden');$('selectedLabel').textContent=q.thinConditions?CONDITION_LABELS[i]:`${st.label} · (${r+1}, ${c+1})`;
  $('calculation').textContent=info.text;$('tip').textContent=q.tip;
- const center=q.pre?info.center:q.thinConditions?[1,1]:q.mean?[r+1,c+1]:[r,c];
+ const center=info.border?null:info.center||(q.thinConditions?[1,1]:[r,c]);
  const neighborhood=q.pre?Boolean(center):['erode','dilate','hit','thinA','thinB','conditions','mean'].includes(st.op);
  $('locatedSource').innerHTML=`<h3>${st.op.startsWith('label')?'暂标号参考图':typeof st.source==='number'?'正确的上一阶段结果':'读取的输入图'}${neighborhood?'与窗口位置':''}</h3>`+table(info.source,{select:neighborhood?center:null,mask:info.k,hit:st.op==='hit',binary:!q.labeling&&!(q.mean||q.numeric)});
- $('patch').innerHTML=info.patch?'<h3>当前 3×3 窗口'+(q.pre?'（实际参与计算的区域）':q.mean?'（全部在原图内）':'（图外补 0）')+'</h3>'+table(info.patch,{select:[1,1],mask:info.k,hit:st.op==='hit',binary:!(q.mean||q.numeric)})+(st.k?'<h3>本步模板 / 核</h3>'+table(st.k,{kernel:true,hit:st.op==='hit'}):''):'';
+ $('patch').innerHTML=info.patch?'<h3>当前 3×3 窗口'+(q.pre?'（实际参与计算的区域）':q.mean?'（全部在原图内）':'（图内完整窗口）')+'</h3>'+table(info.patch,{select:[1,1],mask:info.k,hit:st.op==='hit',binary:!(q.mean||q.numeric)})+(st.k?'<h3>本步模板 / 核</h3>'+table(st.k,{kernel:true,hit:st.op==='hit'}):''):'';
  document.querySelectorAll('#answerGrid .answer').forEach(el=>el.classList.toggle('selected',+el.dataset.cell===i));
 }
 function solutionHTML(q){return '<h3>完整标准答案 · '+q.title+'</h3>'+solveQuestion(q).map(st=>'<h3>'+st.label+'</h3>'+(q.thinConditions?'<p>'+CONDITION_LABELS.map((n,i)=>`${n} = ${st.output[0][i]}`).join('；')+'</p>':(st.colLabels?'<p class="muted">列：'+st.colLabels.join(' / ')+'；行：'+(st.rowLabels||['输出']).join(' / ')+'</p>':'')+table(st.output,{binary:!q.labeling&&!(q.mean||q.numeric)}))).join('')}
@@ -245,4 +285,40 @@ $('clear').onclick=()=>{if(confirm('清空本题所有作答和思路，重新�
 $('next').onclick=()=>{if(current<QUESTIONS.length-1){current++;activeStage=0;save();render();window.scrollTo({top:0,behavior:'smooth'})}};
 $('export').onclick=()=>{const data={title:'影像前后处理讲义练习作答记录',questions:QUESTIONS.map((q,i)=>({question:i+1,title:q.title,reference:q.ref,answers:states[i].answers,concept:states[i].concept===null?null:q.concept.options[states[i].concept],reason:states[i].reason,submitted:states[i].checked,viewedSolution:states[i].revealed,score:states[i].checked?grade(q,states[i]):null}))};const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='影像前后处理-作答记录.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
 render();
+
+// Step through each output cell without changing the student's answers.
+let animationTimer=null,animationIndex=0;
+const originalShowCell=showCell;
+const controls=document.createElement('div');
+controls.innerHTML='<div class="actions"><button id="animPrev">← 上一格</button><button id="animPlay">播放</button><button id="animNext">下一格 →</button><label>速度 <select id="animSpeed"><option value="1600">慢</option><option value="800" selected>中</option><option value="350">快</option></select></label></div><label for="animSlider">拖动查看每一格：<span id="animPosition"></span></label><input id="animSlider" type="range" min="0" value="0" style="width:100%"><p>先看输入图上的窗口，再看右侧运算；下方逐格写入结果。边界直接复制原值。不会修改你的作答。</p>';
+$('explanation').insertBefore(controls,$('explanation').children[1]);
+const output=document.createElement('div');output.id='animOutput';$('explanation').appendChild(output);
+const demo=document.createElement('button');demo.textContent='拖动 / 播放本小问推导';demo.id='animateAnswer';$('check').parentElement.appendChild(demo);
+function stopAnimation(){clearInterval(animationTimer);animationTimer=null;$('animPlay').textContent='播放'}
+showCell=function(i){
+ animationIndex=i;originalShowCell(i);
+ const q=QUESTIONS[current],st=solveQuestion(q)[activeStage],w=st.output[0].length,r=Math.floor(i/w),c=i%w;
+ $('animSlider').max=st.output.flat().length-1;$('animSlider').value=i;
+ $('animPosition').textContent=`${i+1} / ${st.output.flat().length}`;
+ $('animPrev').disabled=i===0;$('animNext').disabled=i===st.output.flat().length-1;
+ if(st.keepBorder&&borderCell(st.input,r,c)){
+  $('locatedSource').innerHTML='<h3>边界：复制这一个像素</h3>'+table(st.input,{binary:isBinary(q)});
+  const cell=$('locatedSource').querySelectorAll('tr')[r+1]?.querySelectorAll('td')[c];if(cell)cell.style.outline='3px solid #dba744';
+  $('patch').innerHTML='<p>mask 会越界 → 跳过运算<br>本步输入原值 '+st.input[r][c]+' → 输出 '+st.output[r][c]+'</p>';
+ }else if(['erode','dilate'].includes(st.op)){
+  const values=st.k.flatMap((row,kr)=>row.flatMap((v,kc)=>v?[st.input[r+kr-1][c+kc-1]]:[]));
+  $('calculation').textContent='① 把 mask 中心放在输入图 ('+(r+1)+','+(c+1)+')。\n② mask 中的 1 表示“看这个位置”，0 表示忽略。读取的是图片像素：['+values.join(', ')+']。\n③ '+(st.op==='dilate'?'这些像素中只要有一个 1，输出就为 1；全部为 0 才输出 0。':'这些像素必须全部为 1，输出才为 1；只要有一个 0 就输出 0。')+'\n④ 本格写入 '+st.output[r][c]+'。';
+ }
+ $('animOutput').innerHTML='<h3>逐格写入输出（· 表示尚未演示）</h3>'+table(st.output.map((row,rr)=>row.map((v,cc)=>rr*w+cc<=i?v:'·')),{binary:isBinary(q)});
+ const target=$('animOutput').querySelectorAll('tr')[r+1]?.querySelectorAll('td')[c];if(target)target.style.outline='3px solid #176e65';
+};
+demo.onclick=()=>{stopAnimation();states[current].revealed=true;save();progress();showCell(0);$('explanation').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'})};
+$('animSlider').oninput=()=>{stopAnimation();showCell(+$('animSlider').value)};
+$('animPrev').onclick=()=>{stopAnimation();showCell(Math.max(0,animationIndex-1))};
+$('animNext').onclick=()=>{stopAnimation();showCell(Math.min(+$('animSlider').max,animationIndex+1))};
+$('animPlay').onclick=()=>{if(animationTimer){stopAnimation();return}if(animationIndex>=+$('animSlider').max)showCell(0);$('animPlay').textContent='暂停';animationTimer=setInterval(()=>{if(animationIndex>=+$('animSlider').max){stopAnimation();return}showCell(animationIndex+1)},+$('animSpeed').value)};
+$('animSpeed').onchange=()=>{if(animationTimer){stopAnimation();$('animPlay').click()}};
+for(const name of ['nav','stageNav','next','editAnswers','clear','draw','zeros','answerGrid'])$(name).addEventListener('click',stopAnimation,true);
+$('answerGrid').addEventListener('input',stopAnimation,true);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAnimation()});
 </script></body></html>
