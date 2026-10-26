@@ -10,7 +10,7 @@
 <div id="overall" class="summary"></div><nav id="nav" class="nav" aria-label="选择题目"></nav>
 <section class="card"><h2 id="title"></h2><div id="reference" class="reference"></div><p id="intro"></p><p id="rules" class="rules"></p></section>
 <div class="layout"><section class="card"><h2>题面 / 先读原图与运算规则</h2><h3 id="sourceLabel"></h3><div id="input"></div><div id="otherInput"></div><h3>当前小问的 kernel / 模板</h3><div id="kernel"></div><p id="kernelCaption" class="aside-info"></p><div id="thinOrder"></div><p class="muted">二值题深色格为1、浅色格为0；灰阶题以格内数字为准。行列坐标从 1 开始。不要只看图形外观，要逐点按规则判断。</p></section>
-<section class="card"><h2>作答 / 先填再看解析</h2><div id="stageNav" class="stage-nav" aria-label="选择小问"></div><h3 id="stageTitle"></h3><p id="stageSource" class="stage-source"></p><div class="actions"><label id="drawLabel" class="draw-label"><input id="draw" type="checkbox">涂格模式：点格切换 1 / 0</label><button id="zeros">本小问空格全部填 0</button></div><p class="muted">默认键盘填数，Tab 换格；灰阶题可填负数、分数或小数，按题面取整规则判分；也可开启涂格模式画图，画完后把空格填 0。空白不会自动算对。提交后点击格子看解析；要继续涂格，请点“修改答案”。</p><div id="answerGrid"></div>
+<section class="card"><h2>作答 / 先填再看解析</h2><div id="stageNav" class="stage-nav" aria-label="选择小问"></div><h3 id="stageTitle"></h3><p id="stageSource" class="stage-source"></p><div class="actions"><label id="drawLabel" class="draw-label"><input id="draw" type="checkbox">涂格模式：点格切换 1 / 0</label><button id="zeros">本小问空格全部填 0</button></div><p class="muted">默认键盘填数：Tab 向右换格，Enter 跳到下一行同一列；Shift+Enter 向上换格，最后一行按 Enter 留在原格。涂格模式可用空格键切换 0/1；灰阶题可填负数、分数或小数，按题面取整规则判分；也可开启涂格模式画图，画完后把空格填 0。空白不会自动算对。提交后点击格子看解析；要继续涂格，请点“修改答案”。</p><div id="answerGrid"></div>
 <section class="concept-box"><h3>再判断一句，检查思路</h3><p id="conceptPrompt"></p><div id="conceptChoices" class="choices"></div><div id="conceptFeedback" aria-live="polite"></div></section>
 <label for="reason"><strong>我的计算思路（可选）</strong></label><textarea id="reason" placeholder="例如：第 3 行第 2 列，上下左右中有 0，所以……"></textarea><p class="muted">文字思路不会被程序自动判分。可导出作答记录发给我，进一步检查你的推理。</p><div class="actions" style="margin-top:14px"><button id="check" class="primary">提交整题并检查</button><button id="editAnswers">修改答案</button><button id="clear">重做本题</button><button id="next">下一题 →</button></div><div id="feedback" class="status" aria-live="polite"></div><button id="reveal" class="hidden">查看完整标准答案（记为已看答案）</button><div id="solution" class="solution hidden"></div></section></div>
 <section id="explanation" class="card explain hidden"><h2>逐格推导 / <span id="selectedLabel"></span></h2><p class="muted">金框标出参与判断的位置，绿色内框标记中心。图外像素按题面规则处理。不同小问可在上方切换。</p><div class="details"><div class="explain-diagrams"><div id="locatedSource"></div><div id="patch"></div></div><div><div id="calculation" class="math"></div><p id="tip" class="rules"></p></div></div></section>
@@ -224,7 +224,18 @@ $('stageNav').onclick=e=>{const b=e.target.closest('[data-stage]');if(b){activeS
 $('draw').onchange=()=>{draw=$('draw').checked;renderStage()};
 $('answerGrid').addEventListener('input',e=>{if(e.target.matches('.answer'))setAnswer(e.target,e.target.value)});
 $('answerGrid').addEventListener('click',e=>{const el=e.target;if(!el.matches('.answer'))return;if(states[current].checked){showCell(+el.dataset.cell);return}if(draw&&isBinary(QUESTIONS[current]))setAnswer(el,parseValue(el.value)===1?'0':'1')});
-$('answerGrid').addEventListener('keydown',e=>{if(draw&&isBinary(QUESTIONS[current])&&e.target.matches('.answer')&&(e.key===' '||e.key==='Enter')){e.preventDefault();if(states[current].checked)showCell(+e.target.dataset.cell);else setAnswer(e.target,parseValue(e.target.value)===1?'0':'1')}});
+$('answerGrid').addEventListener('keydown',e=>{
+ if(!e.target.matches('.answer')||e.isComposing)return;
+ if(e.key==='Enter'){
+  e.preventDefault();
+  const fields=[...$('answerGrid').querySelectorAll('.answer')],position=fields.indexOf(e.target);
+  const columns=QUESTIONS[current].thinConditions?(getComputedStyle($('answerGrid')).gridTemplateColumns.split(' ').length):solveQuestion(QUESTIONS[current])[activeStage].output[0].length;
+  const next=fields[position+(e.shiftKey?-columns:columns)];
+  if(next){next.focus();if(!next.readOnly)next.select();if(states[current].checked)showCell(+next.dataset.cell)}
+  return;
+ }
+ if(draw&&isBinary(QUESTIONS[current])&&e.key===' '){e.preventDefault();if(states[current].checked)showCell(+e.target.dataset.cell);else setAnswer(e.target,parseValue(e.target.value)===1?'0':'1')}
+});
 $('zeros').onclick=()=>{const st=solveQuestion(QUESTIONS[current])[activeStage];states[current].answers[activeStage]??=[];st.output.flat().forEach((_,i)=>{if(parseValue(answer(activeStage,i))===null)states[current].answers[activeStage][i]='0'});invalidate();renderStage()};
 $('conceptChoices').onchange=e=>{states[current].concept=+e.target.value;invalidate()};$('reason').oninput=()=>{states[current].reason=$('reason').value;save()};
 $('check').onclick=()=>{states[current].checked=true;save();progress();gradeUI();$('reveal').classList.remove('hidden');const st=solveQuestion(QUESTIONS[current])[activeStage];let i=st.output.flat().findIndex((v,i)=>!matchesStage(QUESTIONS[current],st,parseValue(answer(activeStage,i)),v));showCell(i<0?0:i)};
